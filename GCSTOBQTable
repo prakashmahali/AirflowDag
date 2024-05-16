@@ -1,0 +1,40 @@
+from datetime import datetime, timedelta
+from airflow import DAG
+from airflow.contrib.operators.gcs_to_bigquery import GCSToBigQueryOperator
+
+# Define the default arguments for the DAG
+default_args = {
+    'owner': 'airflow',
+    'depends_on_past': False,
+    'start_date': datetime(2024, 5, 1),
+    'retries': 1,
+    'retry_delay': timedelta(minutes=5),
+}
+
+# Define the DAG
+dag = DAG(
+    'load_csv_to_bigquery',
+    default_args=default_args,
+    description='Load CSV file from GCS to BigQuery',
+    schedule_interval=timedelta(days=1),
+)
+
+# Define the GCSToBigQueryOperator
+load_to_bq_task = GCSToBigQueryOperator(
+    task_id='load_to_bigquery',
+    bucket='your-source-bucket',
+    source_objects=['your-source-folder/*.csv'],  # Path to the CSV file(s) in GCS
+    destination_project_dataset_table='your_project.your_dataset.your_table',  # BigQuery table to load data into
+    schema_fields=[  # Define the schema of your CSV file(s)
+        {'name': 'column1', 'type': 'STRING', 'mode': 'NULLABLE'},
+        {'name': 'column2', 'type': 'INTEGER', 'mode': 'NULLABLE'},
+        # Add more fields as needed
+    ],
+    skip_leading_rows=1,  # Skip the header row in the CSV file(s)
+    write_disposition='WRITE_TRUNCATE',  # Options: WRITE_TRUNCATE, WRITE_APPEND, WRITE_EMPTY
+    allow_quoted_newlines=True,  # If the data contains quoted newlines
+    dag=dag,
+)
+
+# Set task dependencies
+load_to_bq_task
