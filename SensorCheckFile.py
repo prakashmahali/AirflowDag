@@ -48,3 +48,27 @@ with DAG(
 
     start >> check_file >> branch
     branch >> [task1, task2] >> end
+
+Step 1 : 
+check_file = GCSObjectExistenceSensor(
+    task_id='check_file',
+    bucket=BUCKET_NAME,
+    object=FILE_NAME,
+)
+ Step2 
+BranchPythonOperator: Uses the choose_task function to decide which task to execute next based on the file's existence.
+def choose_task(**kwargs):
+    ti = kwargs['ti']
+    file_exists = ti.xcom_pull(task_ids='check_file')
+    if file_exists:
+        return 'task1'
+    else:
+        return 'task2'
+Task Flow:
+
+start: Initial dummy task.
+check_file: Sensor task to check for the file's existence.
+branch: Branching based on the sensor result.
+task1: Dummy task executed if the file exists.
+task2: Dummy task executed if the file does not exist.
+end: Final task to ensure the DAG completes successfully.
