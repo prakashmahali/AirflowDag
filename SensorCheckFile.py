@@ -50,3 +50,41 @@ with DAG(
     # Define DAG structure
     list_gcs_files >> check_file_task
     check_file_task >> [file_exists_task, file_not_found_task]
+
+========================================================
+from airflow.models import DAG
+from airflow.operators.python_operator import PythonOperator
+from datetime import datetime
+
+# Define a Python function that returns some data
+def my_python_function():
+    return {'key': 'value'}
+
+# Define the DAG
+default_args = {
+    'owner': 'airflow',
+    'start_date': datetime(2022, 1, 1),
+    'retries': 1,
+}
+with DAG('my_dag', default_args=default_args, schedule_interval=None) as dag:
+
+    # Task 1: Execute the Python function and push the result to XCom
+    task1 = PythonOperator(
+        task_id='task1',
+        python_callable=my_python_function
+    )
+
+    # Task 2: Pull the result from XCom and print it
+    def print_result(**kwargs):
+        ti = kwargs['ti']
+        result = ti.xcom_pull(task_ids='task1')
+        print(result)
+
+    task2 = PythonOperator(
+        task_id='task2',
+        python_callable=print_result
+    )
+
+    # Define task dependencies
+    task1 >> task2
+
