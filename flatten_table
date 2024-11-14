@@ -1,0 +1,63 @@
+import json
+import pandas as pd
+from google.cloud import bigquery
+
+def flatten_json(json_data):
+    # Extract basic event information
+    event_id = json_data.get("event_id")
+    event_name = json_data.get("event_name")
+    action = json_data.get("action")
+
+    # Initialize a list to store flattened records
+    flattened_records = []
+
+    # Iterate through the groups and members to flatten the JSON
+    for group in json_data.get("group", []):
+        group_name = group.get("group_name")
+        group_event_name = group.get("event_name")
+
+        for member in group.get("member", []):
+            member_id = member.get("member_id")
+
+            # Create a flattened record
+            flattened_records.append({
+                "event_id": event_id,
+                "event_name": event_name,
+                "action": action,
+                "group_name": group_name,
+                "group_event_name": group_event_name,
+                "member_id": member_id
+            })
+
+    return flattened_records
+
+def load_to_bigquery(flattened_data, table_id):
+    # Create a BigQuery client
+    client = bigquery.Client()
+
+    # Convert the flattened data to a DataFrame
+    df = pd.DataFrame(flattened_data)
+
+    # Load the DataFrame into BigQuery
+    job = client.load_table_from_dataframe(df, table_id)
+    job.result()  # Wait for the load job to complete
+
+    print(f"Loaded {len(flattened_data)} records into {table_id}.")
+
+def main():
+    # Input JSON file path and BigQuery table ID
+    json_file_path = "input.json"
+    table_id = "your-project.your_dataset.your_table"
+
+    # Read the JSON file
+    with open(json_file_path, 'r') as file:
+        json_data = json.load(file)
+
+    # Flatten the JSON data
+    flattened_data = flatten_json(json_data)
+
+    # Load the flattened data into BigQuery
+    load_to_bigquery(flattened_data, table_id)
+
+if __name__ == "__main__":
+    main()
