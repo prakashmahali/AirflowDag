@@ -1,0 +1,77 @@
+[
+    {
+        "organization_id": "org1",
+        "organization_name": "Company A",
+        "departments": [
+            {
+                "dept_id": "d1",
+                "dept_name": "HR",
+                "employees": [
+                    {"emp_id": "e1", "emp_name": "John", "emp_role": "Manager"},
+                    {"emp_id": "e2", "emp_name": "Jane", "emp_role": "Analyst"}
+                ]
+            },
+            {
+                "dept_id": "d2",
+                "dept_name": "IT",
+                "employees": [
+                    {"emp_id": "e3", "emp_name": "Mike", "emp_role": "Developer"}
+                ]
+            }
+        ]
+    },
+    {
+        "organization_id": "org2",
+        "organization_name": "Company B",
+        "departments": [
+            {
+                "dept_id": "d3",
+                "dept_name": "Finance",
+                "employees": [
+                    {"emp_id": "e4", "emp_name": "Alice", "emp_role": "Accountant"}
+                ]
+            }
+        ]
+    }
+]
+import json
+import pandas as pd
+
+# Load the JSON data
+with open('nested_data.json', 'r') as file:
+    data = json.load(file)
+
+# Flatten the data
+flattened_data = []
+
+for organization in data:
+    org_id = organization.get("organization_id")
+    org_name = organization.get("organization_name")
+
+    for department in organization.get("departments", []):
+        dept_id = department.get("dept_id")
+        dept_name = department.get("dept_name")
+
+        for employee in department.get("employees", []):
+            emp_id = employee.get("emp_id")
+            emp_name = employee.get("emp_name")
+            emp_role = employee.get("emp_role")
+
+            # Create a flattened record
+            flattened_data.append({
+                "organization_id": org_id,
+                "organization_name": org_name,
+                "dept_id": dept_id,
+                "dept_name": dept_name,
+                "emp_id": emp_id,
+                "emp_name": emp_name,
+                "emp_role": emp_role
+            })
+
+# Convert to DataFrame
+df = pd.DataFrame(flattened_data)
+
+# Write to CSV
+df.to_csv('flattened_data.csv', index=False)
+
+print("Data has been successfully flattened and saved to 'flattened_data.csv'.")
