@@ -1,0 +1,95 @@
+from airflow import DAG
+from airflow.providers.google.cloud.operators.gcs import GCSDownloadFileOperator
+from airflow.providers.google.cloud.operators.bigquery import BigQueryInsertJobOperator
+from airflow.operators.python import PythonOperator
+from google.cloud import bigquery
+import json
+import pandas as pd
+from datetime import datetime
+import os
+
+# Constants
+BUCKET_NAME = "your-gcs-bucket"
+SOURCE_FILE = "nested_data.json"
+LOCAL_FILE_PATH = "/tmp/nested_data.json"
+DATASET_ID = "your_dataset"
+TABLE_ID = "your_table"
+PROJECT_ID = "your_project"
+
+# Flatten JSON function
+def flatten_json():
+    with open(LOCAL_FILE_PATH, "r") as f:
+        data = json.load(f)
+
+    # Helper function to flatten JSON
+    def flatten(data, parent_key='', sep='_'):
+        items = []
+        for k, v in data.items():
+            new_key = f"{parent_key}{sep}{k}" if parent_key else k
+            if isinstance(v, dict):
+                items.extend(flatten(v, new_key, sep=sep).items())
+            elif isinstance(v, list):
+                for i, item in enumerate(v):
+                    items.extend(flatten(item, f"{new_key}_{i}", sep=sep).items())
+            else:
+                items.append((new_key, v))
+        return dict(items)
+
+    # Flatten the data
+    flattened_data = [flatten(record) for record in data]
+
+    # Convert to DataFrame
+    df = pd.DataFrame(flattened_data)
+    flattened_csv = LOCAL_FILE_PATH.replace(".json", ".csv")
+    df.to_csv(flattened_csv, index=False)
+    return flattened_csv
+
+# DAG definition
+default_args = {
+    "owner": "airflow",
+    "start_date": datetime(2023, 1, 1),
+    "retries": 1,
+}
+
+with DAG(
+    "gcs_to_bq_nested_json",
+    default_args=default_args,
+    schedule_interval=None,
+    catchup=False,
+) as dag:
+
+    # Step 1: Download JSON file from GCS
+    download_json = GCSDownloadFileOperator(
+        task_id="download_json_from_gcs",
+        bucket_name=BUCKET_NAME,
+        object_name=SOURCE_FILE,
+        filename=LOCAL_FILE_PATH,
+    )
+
+    # Step 2: Flatten JSON using Python
+    flatten_task = PythonOperator(
+        task_id="flatten_json",
+        python_callable=flatten_json,
+    )
+
+    # Step 3: Load flattened data to BigQuery
+    load_to_bq = BigQueryInsertJobOperator(
+        task_id="load_to_bq",
+        configuration={
+            "load": {
+                "sourceUris": [f"gs://{BUCKET_NAME}/nested_data_flattened.csv"],
+                "destinationTable": {
+                    "projectId": PROJECT_ID,
+                    "datasetId": DATASET_ID,
+                    "tableId": TABLE_ID,
+                },
+                "autodetect": True,
+                "sourceFormat": "CSV",
+                "writeDisposition": "WRITE_TRUNCATE",
+            }
+        },
+        location="US",
+    )
+
+    # Task dependencies
+    download_json >> flatten_task >> load_to_bq
