@@ -1,0 +1,81 @@
+import json
+import pandas as pd
+from google.cloud import storage
+import io
+
+# Constants
+BUCKET_NAME = 'your-gcs-bucket'
+INPUT_JSON_FILE = 'nested_data.json'
+OUTPUT_CSV_FILE = 'flattened_data.csv'
+
+def download_json_from_gcs(bucket_name, file_name):
+    """Download JSON file from GCS bucket."""
+    storage_client = storage.Client()
+    bucket = storage_client.bucket(bucket_name)
+    blob = bucket.blob(file_name)
+
+    # Download the JSON content as a string
+    json_data = blob.download_as_text()
+    return json.loads(json_data)
+
+def flatten_json(data):
+    """Flatten the nested JSON structure and return a DataFrame."""
+    groups = data.get("group", [])
+    if not groups:
+        groups = [{}]
+
+    flattened_data = []
+
+    for group in groups:
+        group_name = group.get("group_name", None)
+        group_id = group.get("group_id", None)
+        members = group.get("member", [])
+
+        if not members:
+            members = [{}]
+
+        for member in members:
+            member_id = member.get("member_id", None)
+            flattened_record = {
+                "event_id": data.get("event_id", None),
+                "event_name": data.get("event_name", None),
+                "group_name": group_name,
+                "group_id": group_id,
+                "member_id": member_id
+            }
+            flattened_data.append(flattened_record)
+
+    # Create a DataFrame
+    df = pd.DataFrame(flattened_data)
+    return df
+
+def save_csv_to_gcs(bucket_name, df, output_file_name):
+    """Save the DataFrame as a CSV file to GCS bucket."""
+    storage_client = storage.Client()
+    bucket = storage_client.bucket(bucket_name)
+    blob = bucket.blob(output_file_name)
+
+    # Convert DataFrame to CSV format
+    csv_buffer = io.StringIO()
+    df.to_csv(csv_buffer, index=False)
+    csv_buffer.seek(0)
+
+    # Upload CSV content to GCS
+    blob.upload_from_string(csv_buffer.getvalue(), content_type='text/csv')
+    print(f"CSV file '{output_file_name}' saved to GCS bucket '{bucket_name}'.")
+
+def main():
+    # Step 1: Download JSON from GCS
+    json_data = download_json_from_gcs(BUCKET_NAME, INPUT_JSON_FILE)
+    print("JSON file downloaded from GCS.")
+
+    # Step 2: Flatten JSON data
+    df = flatten_json(json_data)
+    print("JSON data flattened.")
+
+    # Step 3: Save CSV to GCS
+    save_csv_to_gcs(BUCKET_NAME, df, OUTPUT_CSV_FILE)
+    print("CSV file uploaded to GCS.")
+
+if __name__ == "__main__":
+    main()
