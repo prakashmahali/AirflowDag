@@ -1,41 +1,67 @@
-import json
+from airflow import DAG
+from airflow.providers.google.cloud.operators.gcs import GCSHook
+from airflow.providers.google.cloud.transfers.local_to_gcs import LocalFilesystemToGCSOperator
+from airflow.providers.google.cloud.transfers.gcs_to_bigquery import GCSToBigQueryOperator
+from airflow.providers.google.cloud.operators.gcs import GCSDeleteObjectsOperator
+from airflow.utils.dates import days_ago
+from airflow.operators.python import PythonOperator
 import pandas as pd
-from google.cloud import storage
-import io
+import json
+import os
+
+# Default DAG arguments
+default_args = {
+    'owner': 'airflow',
+    'start_date': days_ago(1),
+    'retries': 1,
+}
 
 # Constants
 BUCKET_NAME = 'your-gcs-bucket'
-INPUT_JSON_FILE = 'nested_data.json'
-OUTPUT_CSV_FILE = 'flattened_data.csv'
+JSON_FILE_NAME = 'nested_data.json'
+CSV_FILE_NAME = 'flattened_data.csv'
+LOCAL_JSON_PATH = f'/tmp/{JSON_FILE_NAME}'
+LOCAL_CSV_PATH = f'/tmp/{CSV_FILE_NAME}'
+BQ_PROJECT = 'your-project-id'
+BQ_DATASET = 'your_dataset'
+BQ_TABLE = 'your_table'
 
-def download_json_from_gcs(bucket_name, file_name):
-    """Download JSON file from GCS bucket."""
-    storage_client = storage.Client()
-    bucket = storage_client.bucket(bucket_name)
-    blob = bucket.blob(file_name)
+# Define the DAG
+dag = DAG(
+    'gcs_json_to_bq_dag',
+    default_args=default_args,
+    description='Read JSON from GCS, flatten to CSV, upload to GCS, load to BigQuery, and clean up',
+    schedule_interval=None,
+)
 
-    # Download the JSON content as a string
-    json_data = blob.download_as_text()
-    return json.loads(json_data)
+# Function to flatten JSON and save as CSV
+def flatten_json_to_csv():
+    # Read the JSON file from the local path
+    with open(LOCAL_JSON_PATH, 'r') as file:
+        data = json.load(file)
 
-def flatten_json(data):
-    """Flatten the nested JSON structure and return a DataFrame."""
+    # Ensure 'group' field is a list, even if it's missing or empty
     groups = data.get("group", [])
     if not groups:
         groups = [{}]
 
     flattened_data = []
 
+    # Iterate through each group
     for group in groups:
         group_name = group.get("group_name", None)
         group_id = group.get("group_id", None)
         members = group.get("member", [])
 
+        # If 'member' is missing or empty, create a placeholder
         if not members:
             members = [{}]
 
+        # Iterate through each member
         for member in members:
             member_id = member.get("member_id", None)
+
+            # Flattened record for each member
             flattened_record = {
                 "event_id": data.get("event_id", None),
                 "event_name": data.get("event_name", None),
@@ -43,39 +69,63 @@ def flatten_json(data):
                 "group_id": group_id,
                 "member_id": member_id
             }
+
+            # Add to the list of flattened records
             flattened_data.append(flattened_record)
 
-    # Create a DataFrame
+    # Convert to DataFrame and save as CSV
     df = pd.DataFrame(flattened_data)
-    return df
+    df.to_csv(LOCAL_CSV_PATH, index=False)
+    print(f"Flattened data saved to {LOCAL_CSV_PATH}")
 
-def save_csv_to_gcs(bucket_name, df, output_file_name):
-    """Save the DataFrame as a CSV file to GCS bucket."""
-    storage_client = storage.Client()
-    bucket = storage_client.bucket(bucket_name)
-    blob = bucket.blob(output_file_name)
+# Task 1: Download JSON file from GCS
+def download_json_from_gcs():
+    gcs_hook = GCSHook()
+    gcs_hook.download(bucket_name=BUCKET_NAME, object_name=JSON_FILE_NAME, filename=LOCAL_JSON_PATH)
+    print(f"Downloaded {JSON_FILE_NAME} from GCS to {LOCAL_JSON_PATH}")
 
-    # Convert DataFrame to CSV format
-    csv_buffer = io.StringIO()
-    df.to_csv(csv_buffer, index=False)
-    csv_buffer.seek(0)
+download_task = PythonOperator(
+    task_id='download_json_from_gcs',
+    python_callable=download_json_from_gcs,
+    dag=dag,
+)
 
-    # Upload CSV content to GCS
-    blob.upload_from_string(csv_buffer.getvalue(), content_type='text/csv')
-    print(f"CSV file '{output_file_name}' saved to GCS bucket '{bucket_name}'.")
+# Task 2: Flatten JSON and save as CSV
+flatten_task = PythonOperator(
+    task_id='flatten_json_to_csv',
+    python_callable=flatten_json_to_csv,
+    dag=dag,
+)
 
-def main():
-    # Step 1: Download JSON from GCS
-    json_data = download_json_from_gcs(BUCKET_NAME, INPUT_JSON_FILE)
-    print("JSON file downloaded from GCS.")
+# Task 3: Upload CSV to GCS
+upload_csv_to_gcs = LocalFilesystemToGCSOperator(
+    task_id='upload_csv_to_gcs',
+    src=LOCAL_CSV_PATH,
+    dst=CSV_FILE_NAME,
+    bucket=BUCKET_NAME,
+    dag=dag,
+)
 
-    # Step 2: Flatten JSON data
-    df = flatten_json(json_data)
-    print("JSON data flattened.")
+# Task 4: Load CSV to BigQuery
+load_csv_to_bq = GCSToBigQueryOperator(
+    task_id='load_csv_to_bq',
+    bucket=BUCKET_NAME,
+    source_objects=[CSV_FILE_NAME],
+    destination_project_dataset_table=f'{BQ_PROJECT}.{BQ_DATASET}.{BQ_TABLE}',
+    source_format='CSV',
+    skip_leading_rows=1,
+    write_disposition='WRITE_TRUNCATE',
+    autodetect=True,
+    dag=dag,
+)
 
-    # Step 3: Save CSV to GCS
-    save_csv_to_gcs(BUCKET_NAME, df, OUTPUT_CSV_FILE)
-    print("CSV file uploaded to GCS.")
+# Task 5: Delete the CSV file from GCS
+cleanup_csv_from_gcs = GCSDeleteObjectsOperator(
+    task_id='cleanup_csv_from_gcs',
+    bucket_name=BUCKET_NAME,
+    objects=[CSV_FILE_NAME],
+    dag=dag,
+)
 
-if __name__ == "__main__":
-    main()
+# Set task dependencies
+download_task >> flatten_task >> upload_csv_to_gcs >> load_csv_to_bq >> cleanup_csv_from_gcs
