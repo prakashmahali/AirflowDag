@@ -1,0 +1,67 @@
+from airflow import DAG
+from airflow.operators.python import PythonOperator
+from google.cloud import storage
+import json
+import os
+from datetime import datetime
+from flatten_json import flatten
+
+# Set default arguments
+default_args = {
+    'owner': 'airflow',
+    'depends_on_past': False,
+    'email_on_failure': False,
+    'email_on_retry': False,
+    'retries': 1,
+}
+
+# Path to local Composer directory for file saving
+LOCAL_FILE_PATH = '/home/airflow/gcs/data'
+
+# Function to download file from GCS
+def download_file_from_gcs(bucket_name, source_blob_name, destination_file_name):
+    storage_client = storage.Client()
+    bucket = storage_client.bucket(bucket_name)
+    blob = bucket.blob(source_blob_name)
+    blob.download_to_filename(destination_file_name)
+    print(f"Downloaded {source_blob_name} from bucket {bucket_name} to {destination_file_name}")
+
+# Function to flatten JSON
+def flatten_json_file(input_file, output_file):
+    with open(input_file, 'r') as f:
+        data = json.load(f)
+    flattened_data = flatten(data)
+    with open(output_file, 'w') as f:
+        json.dump(flattened_data, f, indent=4)
+    print(f"Flattened JSON saved to {output_file}")
+
+# Define the DAG
+with DAG(
+    'gcs_to_local_flatten_json',
+    default_args=default_args,
+    description='Download JSON from GCS, flatten it, and save locally',
+    schedule_interval=None,  # Trigger manually
+    start_date=datetime(2024, 1, 1),
+    catchup=False,
+) as dag:
+
+    download_task = PythonOperator(
+        task_id='download_json',
+        python_callable=download_file_from_gcs,
+        op_kwargs={
+            'bucket_name': 'your-gcs-bucket',  # Replace with your GCS bucket
+            'source_blob_name': 'path/to/json/file.json',  # Replace with your GCS file path
+            'destination_file_name': f'{LOCAL_FILE_PATH}/input.json',
+        },
+    )
+
+    flatten_task = PythonOperator(
+        task_id='flatten_json',
+        python_callable=flatten_json_file,
+        op_kwargs={
+            'input_file': f'{LOCAL_FILE_PATH}/input.json',
+            'output_file': f'{LOCAL_FILE_PATH}/flattened_output.json',
+        },
+    )
+
+    download_task >> flatten_task
