@@ -5,21 +5,19 @@ import pandas as pd
 def flatten_and_save_to_csv(input_file, output_file):
     flattened_data = []
 
-    # Read the JSON data from file
+    # Open the file and load the JSON array
     with open(input_file, 'r') as f:
-        json_data = json.load(f)
+        json_data = json.load(f)  # Load the entire JSON array
 
     for record in json_data:
         event_name = record.get("event")
         event_date = record.get("date")
 
-        # Check if the 'group' key exists and is not empty
         if "group" in record and record["group"]:
             for group in record.get("group", []):
-                group_id = group.get("group_id", None)
-                group_name = group.get("group_name", None)
+                group_id = group.get("group_id")
+                group_name = group.get("group_name")
 
-                # Check if the 'member' list exists and is not empty
                 if "member" in group and group["member"]:
                     for member in group.get("member", []):
                         flattened_data.append({
@@ -31,7 +29,6 @@ def flatten_and_save_to_csv(input_file, output_file):
                             "member_name": member.get("name")
                         })
                 else:
-                    # Handle cases where 'member' list is empty
                     flattened_data.append({
                         "event": event_name,
                         "date": event_date,
@@ -40,16 +37,6 @@ def flatten_and_save_to_csv(input_file, output_file):
                         "member_id": None,
                         "member_name": None
                     })
-        else:
-            # Handle cases where 'group' list is empty
-            flattened_data.append({
-                "event": event_name,
-                "date": event_date,
-                "group_id": None,
-                "group_name": None,
-                "member_id": None,
-                "member_name": None
-            })
 
     # Convert to DataFrame and save as CSV
     df = pd.DataFrame(flattened_data)
