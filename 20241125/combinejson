@@ -1,0 +1,75 @@
+from airflow import DAG
+from airflow.operators.python import PythonOperator
+from datetime import datetime, timedelta
+import os
+import json
+import pandas as pd
+
+# Configurations
+JSON_SOURCE_DIR = "/home/airflow/gcs/data"
+COMBINED_JSON_FILE = "/home/airflow/gcs/data/combined.json"
+FLATTENED_CSV_FILE = "/home/airflow/gcs/data/flattened.csv"
+
+default_args = {
+    'owner': 'airflow',
+    'depends_on_past': False,
+    'email_on_failure': False,
+    'email_on_retry': False,
+    'retries': 1,
+    'retry_delay': timedelta(minutes=5),
+}
+
+def combine_json_files(source_dir, combined_file):
+    """Combine all JSON files in the directory into a single JSON file."""
+    combined_data = []
+    
+    for file_name in os.listdir(source_dir):
+        if file_name.endswith('.json'):
+            file_path = os.path.join(source_dir, file_name)
+            with open(file_path, 'r') as f:
+                data = json.load(f)
+                if isinstance(data, list):
+                    combined_data.extend(data)
+                else:
+                    combined_data.append(data)
+    
+    with open(combined_file, 'w') as f:
+        json.dump(combined_data, f)
+
+def flatten_json(combined_file, output_file):
+    """Flatten the combined JSON and save it as a CSV file."""
+    with open(combined_file, 'r') as f:
+        combined_data = json.load(f)
+    
+    # Flatten JSON using pandas
+    df = pd.json_normalize(combined_data)
+    df.to_csv(output_file, index=False)
+
+with DAG(
+    'process_json_files',
+    default_args=default_args,
+    description='Combine and process JSON files from GCS',
+    schedule_interval=timedelta(hours=1),
+    start_date=datetime(2024, 11, 23),
+    catchup=False,
+) as dag:
+
+    combine_task = PythonOperator(
+        task_id='combine_json_files',
+        python_callable=combine_json_files,
+        op_kwargs={
+            'source_dir': JSON_SOURCE_DIR,
+            'combined_file': COMBINED_JSON_FILE,
+        },
+    )
+
+    flatten_task = PythonOperator(
+        task_id='flatten_json',
+        python_callable=flatten_json,
+        op_kwargs={
+            'combined_file': COMBINED_JSON_FILE,
+            'output_file': FLATTENED_CSV_FILE,
+        },
+    )
+
+    combine_task >> flatten_task
