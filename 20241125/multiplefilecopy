@@ -10,6 +10,84 @@ GCS_BUCKET_NAME = 'your-gcs-bucket-name'  # Replace with your bucket name
 GCS_SOURCE_PREFIX = ''  # Optional, specify a prefix to filter files (e.g., 'data/')
 LOCAL_TARGET_DIR = '/home/airflow/gcs/data'  # Replace with your local directory
 
+
+
+from airflow import DAG
+from airflow.operators.python import PythonOperator
+from airflow.providers.google.cloud.operators.gcs import GCSListObjectsOperator, GCSToLocalFilesystemOperator
+from datetime import datetime
+import re
+
+# Define variables
+GCS_BUCKET = 'your-gcs-bucket-name'
+GCS_PREFIX = ''  # Prefix for filtering files (if needed)
+LOCAL_FOLDER = '/home/airflow/local_folder'  # Local folder for downloaded files
+
+# Function to filter files starting with a numeric value
+def filter_numeric_files(**context):
+    files = context['task_instance'].xcom_pull(task_ids='list_gcs_files')
+    numeric_files = [file for file in files if re.match(r'^\d', file)]  # Regex to match files starting with a numeric value
+    context['task_instance'].xcom_push(key='numeric_files', value=numeric_files)
+
+# Define the DAG
+default_args = {
+    'start_date': datetime(2024, 11, 23),
+    'catchup': False
+}
+
+with DAG(
+    dag_id='copy_numeric_json_files',
+    default_args=default_args,
+    schedule_interval=None,  # Manual trigger
+    description='Copy JSON files starting with numeric values from GCS to local',
+    tags=['gcs', 'json', 'example']
+) as dag:
+
+    # Task 1: List all files in the GCS bucket
+    list_gcs_files = GCSListObjectsOperator(
+        task_id='list_gcs_files',
+        bucket_name=GCS_BUCKET,
+        prefix=GCS_PREFIX,
+    )
+
+    # Task 2: Filter files starting with a numeric value
+    filter_files = PythonOperator(
+        task_id='filter_numeric_files',
+        python_callable=filter_numeric_files,
+        provide_context=True,
+    )
+
+    # Task 3: Download the filtered files
+    def download_files(**context):
+        import os
+        from google.cloud import storage
+
+        # Retrieve filtered files from XCom
+        numeric_files = context['task_instance'].xcom_pull(key='numeric_files', task_ids='filter_numeric_files')
+
+        # Initialize GCS client
+        client = storage.Client()
+        bucket = client.bucket(GCS_BUCKET)
+
+        # Ensure the local folder exists
+        os.makedirs(LOCAL_FOLDER, exist_ok=True)
+
+        # Download each file
+        for file in numeric_files:
+            blob = bucket.blob(file)
+            local_file_path = os.path.join(LOCAL_FOLDER, file.split('/')[-1])
+            blob.download_to_filename(local_file_path)
+            print(f"Downloaded: {file} to {local_file_path}")
+
+    download_gcs_files = PythonOperator(
+        task_id='download_gcs_files',
+        python_callable=download_files,
+        provide_context=True,
+    )
+
+    # Task dependencies
+    list_gcs_files >> filter_files >> download_gcs_files
+
 # Function to filter and copy files
 def copy_numeric_json_files_from_gcs():
     # Initialize GCS Hook
