@@ -1,0 +1,51 @@
+from airflow import DAG
+from airflow.operators.python import PythonOperator
+from airflow.providers.google.cloud.hooks.gcs import GCSHook
+from datetime import datetime
+import os
+import re
+
+# Define constants
+GCS_BUCKET_NAME = 'your-gcs-bucket-name'  # Replace with your bucket name
+GCS_SOURCE_PREFIX = ''  # Optional, specify a prefix to filter files (e.g., 'data/')
+LOCAL_TARGET_DIR = '/home/airflow/gcs/data'  # Replace with your local directory
+
+# Function to filter and copy files
+def copy_numeric_json_files_from_gcs():
+    # Initialize GCS Hook
+    gcs_hook = GCSHook()
+    
+    # List files in the bucket with the specified prefix
+    files = gcs_hook.list(bucket_name=GCS_BUCKET_NAME, prefix=GCS_SOURCE_PREFIX)
+    
+    # Filter files: JSON files starting with a numeric value
+    numeric_json_files = [file for file in files if re.match(r'^\d', os.path.basename(file)) and file.endswith('.json')]
+
+    # Ensure the local target directory exists
+    os.makedirs(LOCAL_TARGET_DIR, exist_ok=True)
+    
+    # Download each file
+    for file in numeric_json_files:
+        local_path = os.path.join(LOCAL_TARGET_DIR, os.path.basename(file))
+        gcs_hook.download(bucket_name=GCS_BUCKET_NAME, object_name=file, filename=local_path)
+        print(f"Downloaded {file} to {local_path}")
+
+# Define the DAG
+default_args = {
+    'start_date': datetime(2024, 11, 23),
+    'catchup': False,
+}
+
+with DAG(
+    dag_id='copy_numeric_json_from_gcs',
+    default_args=default_args,
+    schedule_interval=None,  # Manual trigger
+    description='Copy JSON files starting with numeric values from GCS to local folder',
+    tags=['gcs', 'json', 'file_copy']
+) as dag:
+
+    # Task to copy files
+    copy_files_task = PythonOperator(
+        task_id='copy_files',
+        python_callable=copy_numeric_json_files_from_gcs
+    )
