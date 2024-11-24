@@ -1,0 +1,75 @@
+from airflow import DAG
+from airflow.operators.python import PythonOperator
+from datetime import datetime, timedelta
+from google.cloud import storage
+import pandas as pd
+import os
+
+# Configurations
+GCS_BUCKET_NAME = "your-bucket-name"
+GCS_SOURCE_PREFIX = "source-folder/"  # Adjust the folder where JSON files are stored
+GCS_DEST_FOLDER = "processed-folder/"  # Folder to save the CSV files
+
+default_args = {
+    'owner': 'airflow',
+    'depends_on_past': False,
+    'email_on_failure': False,
+    'email_on_retry': False,
+    'retries': 1,
+    'retry_delay': timedelta(minutes=5),
+}
+
+def list_gcs_files(bucket_name, prefix):
+    """List files in a GCS bucket."""
+    client = storage.Client()
+    bucket = client.bucket(bucket_name)
+    blobs = bucket.list_blobs(prefix=prefix)
+    return [blob.name for blob in blobs if not blob.name.endswith('/')]
+
+def process_file_to_csv(bucket_name, file_name, dest_folder):
+    """Download JSON, flatten it, convert to CSV, and save back to GCS."""
+    client = storage.Client()
+    bucket = client.bucket(bucket_name)
+
+    # Download the JSON file
+    blob = bucket.blob(file_name)
+    json_data = blob.download_as_text()
+    
+    # Flatten JSON and convert to CSV
+    data = pd.json_normalize(pd.read_json(json_data))
+    csv_file_name = os.path.join("/tmp", os.path.basename(file_name).replace('.json', '.csv'))
+    data.to_csv(csv_file_name, index=False)
+    
+    # Remove the header from the CSV
+    with open(csv_file_name, 'r') as f:
+        lines = f.readlines()
+    with open(csv_file_name, 'w') as f:
+        f.writelines(lines[1:])
+
+    # Upload the headerless CSV back to GCS
+    dest_blob = bucket.blob(f"{dest_folder}{os.path.basename(csv_file_name)}")
+    dest_blob.upload_from_filename(csv_file_name)
+    
+    # Clean up local file
+    os.remove(csv_file_name)
+
+def process_all_files(**kwargs):
+    """Process all JSON files in the GCS bucket."""
+    files = list_gcs_files(GCS_BUCKET_NAME, GCS_SOURCE_PREFIX)
+    for file_name in files:
+        process_file_to_csv(GCS_BUCKET_NAME, file_name, GCS_DEST_FOLDER)
+
+with DAG(
+    'gcs_json_to_csv',
+    default_args=default_args,
+    description='Process JSON files from GCS, flatten them, convert to CSV, and remove header',
+    schedule_interval=timedelta(hours=1),
+    start_date=datetime(2024, 11, 23),
+    catchup=False,
+) as dag:
+
+    process_files_task = PythonOperator(
+        task_id='process_files',
+        python_callable=process_all_files,
+        provide_context=True,
+    )
